@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>精確合併列印工具 - 多變數專業版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
+        .canvas-container { position: relative; overflow: hidden; border: 1px solid #d1d5db; background: white; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        .drag-item {
+            position: absolute;
+            cursor: move;
+            user-select: none;
+            padding: 0;
+            line-height: 1;
+            white-space: nowrap;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+            transition: border 0.2s, background-color 0.2s, z-index 0.2s;
+        }
+        /* 未選取的變數樣式 */
+        .drag-item.inactive { border: 1px dashed #9ca3af; background: rgba(156, 163, 175, 0.1); z-index: 10; }
+        /* 目前選取的變數樣式 */
+        .drag-item.active { border: 2px solid #2563eb; background: rgba(37, 99, 235, 0.2); z-index: 20; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3); }
+        
+        .step-card { background: white; padding: 1.5rem; border-radius: 0.75rem; border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .step-number { background: #2563eb; color: white; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.875rem; margin-right: 0.5rem; }
+    </style>
+</head>
+<body class="p-4 md:p-10 flex flex-col min-h-screen">
+    <div class="max-w-[1400px] mx-auto flex-grow w-full">
+        <header class="mb-8 flex flex-col md:flex-row md:items-end justify-between">
+            <div>
+                <h1 class="text-4xl font-black text-gray-900 tracking-tight">精確合併列印工具</h1>
+                <p class="text-gray-500 mt-2">支援無縫拖拉偏移、對齊設定、實時縮放、鍵盤微調與多欄位編輯 <a href="https://youtu.be/z2XA0yZ-CW0" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-700 underline font-medium ml-1">操作影片示範</a></p>
+            </div>
+            <div class="mt-4 md:mt-0 text-sm text-gray-400">符合 A4 標準 (210x297mm)</div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- 左側控制區 (佔 4 欄) -->
+            <div class="lg:col-span-4 space-y-4">
+                
+                <!-- Step 1: 版型與留白 -->
+                <div class="step-card transition-all duration-300">
+                    <h2 class="font-bold flex items-center justify-between text-gray-800 cursor-pointer select-none" onclick="toggleStep('step1')">
+                        <div class="flex items-center"><span class="step-number">1</span> 版面與裁切設定</div>
+                        <svg id="icon-step1" class="w-5 h-5 transform rotate-180 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </h2>
+                    
+                    <div id="step1-content" class="mt-4 block">
+                        <div class="mb-4">
+                            <label class="block text-xs font-semibold text-gray-500 uppercase mb-2">紙張方向</label>
+                            <div class="flex gap-4">
+                                <label class="flex items-center text-sm cursor-pointer"><input type="radio" name="orientation" value="p" checked class="mr-1" onchange="updateEditorDimensions()"> 直式 (Portrait)</label>
+                                <label class="flex items-center text-sm cursor-pointer"><input type="radio" name="orientation" value="l" class="mr-1" onchange="updateEditorDimensions()"> 橫式 (Landscape)</label>
+                            </div>
+                        </div>
+
+                        <label class="block text-xs font-semibold text-gray-500 uppercase mb-2">分割版型</label>
+                        <div class="grid grid-cols-3 gap-2 mb-4">
+                            <button onclick="setLayout(1)" id="btn-layout-1" class="layout-btn border-2 p-2 rounded-lg transition hover:bg-gray-50 border-blue-500 bg-blue-50">
+                                <span class="text-xs font-bold block">一頁 1 張</span>
+                            </button>
+                            <button onclick="setLayout(2)" id="btn-layout-2" class="layout-btn border-2 p-2 rounded-lg transition hover:bg-gray-50 border-gray-200">
+                                <span class="text-xs font-bold block text-center">對分 2 張</span>
+                            </button>
+                            <button onclick="setLayout(4)" id="btn-layout-4" class="layout-btn border-2 p-2 rounded-lg transition hover:bg-gray-50 border-gray-200">
+                                <span class="text-xs font-bold block text-center">四格 4 張</span>
+                            </button>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                            <div>
+                                <label class="text-xs text-gray-700 font-bold">四周邊界留白</label>
+                                <div class="flex items-center mt-1">
+                                    <input type="number" id="margin-size" value="5" min="0" max="30" class="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500" onchange="updateEditorDimensions()" />
+                                    <span class="text-xs text-gray-500 ml-1">mm</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-700 font-bold text-blue-700">中間間距微調</label>
+                                <div class="flex items-center mt-1">
+                                    <input type="number" id="gap-adjust" value="0" step="0.5" class="w-full p-2 border border-blue-300 rounded text-sm focus:ring-2 focus:ring-blue-500" onchange="updateEditorDimensions()" />
+                                    <span class="text-xs text-gray-500 ml-1">mm</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: 資料與自訂字型 -->
+                <div class="step-card relative transition-all duration-300">
+                    <h2 class="font-bold flex items-center justify-between text-gray-800 cursor-pointer select-none" onclick="toggleStep('step2')">
+                        <div class="flex items-center"><span class="step-number">2</span> 匯入底圖與資料</div>
+                        <svg id="icon-step2" class="w-5 h-5 transform transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </h2>
+                    
+                    <div id="step2-content" class="mt-4 hidden space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase mb-2">底圖上傳 (單張設計圖)</label>
+                            <input type="file" id="bg-input" accept="image/*" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase mb-2">名單匯入 (.xlsx / .xls / .csv)</label>
+                            <input type="file" id="excel-input" accept=".xlsx, .xls, .csv" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100 cursor-pointer mb-2" />
+                            
+                            <label class="block text-xs text-gray-500 mb-1">手動輸入 (多欄位請用半形逗號 <kbd class="bg-gray-200 px-1 rounded">,</kbd> 分隔)</label>
+                            <textarea id="name-list" rows="3" class="w-full p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500" placeholder="例如：&#10;文本內容, 90分, 甲等&#10;陳小華, 85分, 乙等" oninput="parseData()"></textarea>
+                        </div>
+                        <div class="pt-4 border-t border-gray-100">
+                            <label class="block text-xs font-semibold text-purple-600 uppercase mb-2">自訂字型上傳 (.ttf / .otf, 可多選)</label>
+                            <input type="file" id="font-upload" accept=".ttf, .otf" multiple class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 cursor-pointer mb-1" />
+                            <p class="text-[10px] text-gray-400 mb-1">提示：上傳後，請至「步驟 3」下拉選單中套用。</p>
+                            <div id="font-upload-status" class="text-xs text-purple-600 font-medium"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: 設定 (個別變數設定) -->
+                <div class="step-card bg-blue-50 border-blue-200 transition-all duration-300">
+                    <h2 class="font-bold flex items-center justify-between text-blue-900 cursor-pointer select-none" onclick="toggleStep('step3')">
+                        <div class="flex items-center"><span class="step-number bg-blue-800">3</span> 變數個別設定</div>
+                        <svg id="icon-step3" class="w-5 h-5 transform transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </h2>
+                    
+                    <div id="step3-content" class="mt-4 hidden">
+                        <p class="text-xs text-blue-700 mb-4">點選預覽區的文字方塊即可設定（也可使用 <kbd class="bg-white border rounded px-1">↑</kbd> <kbd class="bg-white border rounded px-1">↓</kbd> <kbd class="bg-white border rounded px-1">←</kbd> <kbd class="bg-white border rounded px-1">→</kbd> 微調）</p>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="text-xs font-bold text-gray-700 block mb-1">目前選取變數：</label>
+                                <div id="active-var-name" class="font-bold text-blue-700 text-lg bg-white px-3 py-1 rounded border border-blue-200 inline-block shadow-sm">變數 1</div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="col-span-2">
+                                    <label class="text-xs text-gray-600 block mb-1">選擇字型</label>
+                                    <select id="var-font" class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white" onchange="updateActiveVar('font', this.value)">
+                                        <option value="sans-serif">系統黑體 (預設)</option>
+                                        <option value="kai">標楷體 (BiauKai/KaiTi)</option>
+                                        <option value="serif">系統明體 (MingLiU)</option>
+                                    </select>
+                                </div>
+                                <div class="col-span-2 sm:col-span-1">
+                                    <label class="text-xs text-gray-600 block mb-1">對齊方式</label>
+                                    <select id="var-align" class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 bg-white" onchange="updateActiveVar('align', this.value)">
+                                        <option value="left">靠左對齊</option>
+                                        <option value="center">置中對齊</option>
+                                        <option value="right">靠右對齊</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-xs text-gray-600 block mb-1">大小 (pt)</label>
+                                    <input type="number" id="var-size" value="30" class="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500" onchange="updateActiveVar('size', this.value)" />
+                                </div>
+                                <div class="col-span-2 sm:col-span-1">
+                                    <label class="text-xs text-gray-600 block mb-1">顏色</label>
+                                    <input type="color" id="var-color" value="#000000" class="w-full h-9 p-1 border rounded cursor-pointer" onchange="updateActiveVar('color', this.value)" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="generatePDF()" id="generate-btn" class="w-full bg-gray-900 hover:bg-black text-white font-black py-4 px-6 rounded-xl shadow-xl transition-all active:scale-95 flex items-center justify-center mt-6 text-lg">
+                    產出並下載 PDF
+                </button>
+                <div id="status-msg" class="text-center text-xs text-gray-500 font-medium mt-2"></div>
+
+            </div>
+
+            <!-- 右側預覽區 (佔 8 欄) -->
+            <div class="lg:col-span-8 flex flex-col h-full">
+                <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-200 flex-grow flex flex-col items-center">
+                    
+                    <!-- 預覽區標題列 (含縮放控制) -->
+                    <div class="w-full flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                        <h2 class="text-xl font-bold text-gray-800">全版面實時預覽</h2>
+                        
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center bg-gray-100 px-3 py-1.5 rounded-full text-sm">
+                                <span class="text-gray-500 mr-2 font-bold">縮放</span>
+                                <input type="range" id="zoom-slider" min="0.5" max="3" step="0.1" value="1" class="w-24 md:w-32 cursor-pointer" oninput="changeZoom(this.value)">
+                                <span id="zoom-display" class="w-12 text-right text-gray-700 font-medium">100%</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 提示區塊 -->
+                    <div class="w-full mb-4 px-4 py-2 bg-yellow-50 text-yellow-800 text-xs md:text-sm rounded border border-yellow-200 flex justify-between">
+                        <span>💡 拖拉藍框對位，或點選後使用 <b>方向鍵</b> 微調 (按住 Shift 加速)</span>
+                    </div>
+
+                    <!-- 畫布滾動區域 -->
+                    <div class="w-full flex-grow bg-gray-200 rounded-xl shadow-inner overflow-auto h-[500px] md:h-[600px] relative p-8 flex">
+                        <div id="canvas-container" class="canvas-container shadow-2xl m-auto shrink-0 transition-transform origin-center">
+                            <!-- JS 會自動在這裡產生網格與動態生成的拖拉方塊 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 作者署名區塊 -->
+    <footer class="mt-12 py-6 text-center text-sm font-medium text-gray-400 border-t border-gray-200">
+        程式作者 : 徐承佑
+    </footer>
+
+    <script>
+        const { jsPDF } = window.jspdf;
+        
+        // 字型對應表 (使用瀏覽器/系統內建字型，動態支援自訂字型)
+        const fontMap = {
+            'sans-serif': "'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', 'Heiti TC', sans-serif",
+            'kai': "'DFKai-SB', 'BiauKai', 'KaiTi', 'Kaiti TC', serif",
+            'serif': "'PMingLiU', 'MingLiU', 'Apple LiSung', 'Songti TC', serif"
+        };
+
+        let state = {
+            layout: 1, 
+            bgData: null,
+            bgNaturalWidth: 0,
+            bgNaturalHeight: 0,
+            parsedData: [['文本內容']], // 預設資料改為文本內容
+            variables: [], 
+            activeVarIndex: 0,
+            zoom: 1 
+        };
+
+        const canvasContainer = document.getElementById('canvas-container');
+        const marginInput = document.getElementById('margin-size');
+        const gapAdjustInput = document.getElementById('gap-adjust');
+
+        // 縮放控制邏輯
+        function changeZoom(val) {
+            state.zoom = parseFloat(val);
+            document.getElementById('zoom-display').innerText = Math.round(state.zoom * 100) + '%';
+            updateEditorDimensions();
+        }
+
+        // 收折面板邏輯 (手風琴效果)
+        function toggleStep(stepId) {
+            const targetContent = document.getElementById(stepId + '-content');
+            const targetIcon = document.getElementById('icon-' + stepId);
+            const isCurrentlyHidden = targetContent.classList.contains('hidden');
+            
+            // 先關閉所有面板
+            ['step1', 'step2', 'step3'].forEach(id => {
+                document.getElementById(id + '-content').classList.add('hidden');
+                document.getElementById('icon-' + id).classList.remove('rotate-180');
+            });
+
+            // 若原本是隱藏的，就將其展開
+            if (isCurrentlyHidden) {
+                targetContent.classList.remove('hidden');
+                targetIcon.classList.add('rotate-180');
+            }
+        }
+
+        // 初始化第一個變數，預設位置往下調整避免被頂部切到，並加上預設左對齊
+        function initVariables() {
+            if (state.variables.length === 0) {
+                state.variables.push({ id: 0, posX: 10, posY: 15, size: 30, color: '#000000', font: 'sans-serif', align: 'left' });
+            }
+        }
+        initVariables();
+
+        function setLayout(n) {
+            state.layout = n;
+            document.querySelectorAll('.layout-btn').forEach(btn => btn.className = 'layout-btn border-2 p-2 rounded-lg transition hover:bg-gray-50 border-gray-200');
+            document.getElementById(`btn-layout-${n}`).classList.add('border-blue-500', 'bg-blue-50');
+            updateEditorDimensions();
+        }
+
+        // 解析資料區域 (支援逗號分隔)
+        function parseData() {
+            const text = document.getElementById('name-list').value;
+            const lines = text.split('\n').filter(l => l.trim() !== '');
+            if (lines.length === 0) {
+                state.parsedData = [['文本內容']];
+            } else {
+                state.parsedData = lines.map(line => line.split(',').map(item => item.trim()));
+            }
+            syncVariablesWithData();
+        }
+
+        // 確保畫面上的變數數量與資料欄位數一致
+        function syncVariablesWithData() {
+            let maxCols = 1;
+            if (state.parsedData.length > 0) {
+                maxCols = Math.max(...state.parsedData.map(r => r.length));
+            }
+            
+            // 補充不足的變數
+            while (state.variables.length < maxCols) {
+                const idx = state.variables.length;
+                state.variables.push({
+                    id: idx,
+                    posX: 10,
+                    posY: 15 + (idx * 15),
+                    size: 30,
+                    color: '#000000',
+                    font: 'sans-serif',
+                    align: 'left' // 新變數預設靠左
+                });
+            }
+            // 裁減多餘的變數
+            if (state.variables.length > maxCols) {
+                state.variables = state.variables.slice(0, maxCols);
+            }
+            
+            if (state.activeVarIndex >= state.variables.length) {
+                state.activeVarIndex = Math.max(0, state.variables.length - 1);
+            }
+
+            updateSettingsPanel();
+            updateEditorDimensions();
+        }
+
+        // 更新左側獨立設定面板
+        function updateSettingsPanel() {
+            if (state.variables.length === 0) return;
+            const v = state.variables[state.activeVarIndex];
+            
+            const sampleText = state.parsedData[0]?.[state.activeVarIndex] || `變數 ${state.activeVarIndex + 1}`;
+            document.getElementById('active-var-name').innerText = `[ ${sampleText} ]`;
+            
+            document.getElementById('var-size').value = v.size;
+            document.getElementById('var-color').value = v.color;
+            document.getElementById('var-font').value = v.font;
+            document.getElementById('var-align').value = v.align || 'left';
+        }
+
+        // 接收面板的變更並寫入狀態
+        window.updateActiveVar = function(key, value) {
+            if (state.variables.length === 0) return;
+            state.variables[state.activeVarIndex][key] = value;
+            updateDragPositions(); // 重新渲染畫面
+        }
+
+        // 核心演算法：計算窗格實體尺寸
+        function getCellDimensions() {
+            const margin = parseFloat(marginInput.value) || 0;
+            const gapAdjust = parseFloat(gapAdjustInput.value) || 0;
+            const orientation = document.querySelector('input[name="orientation"]:checked').value;
+            
+            const a4W = orientation === 'p' ? 210 : 297;
+            const a4H = orientation === 'p' ? 297 : 210;
+            
+            let cols = 1, rows = 1;
+            if (state.layout === 2) { if (orientation === 'p') rows = 2; else cols = 2; }
+            if (state.layout === 4) { cols = 2; rows = 2; }
+
+            const innerGap = (2 * margin) + gapAdjust;
+            const imgW = cols === 1 ? (a4W - 2 * margin) : (a4W - 2 * margin - (cols - 1) * innerGap) / cols;
+            const imgH = rows === 1 ? (a4H - 2 * margin) : (a4H - 2 * margin - (rows - 1) * innerGap) / rows;
+
+            return { imgW, imgH, cols, rows, margin, innerGap, a4W, a4H, orientation };
+        }
+
+        // 動態產生全版面預覽網格與文字方塊
+        function updateEditorDimensions() {
+            const dims = getCellDimensions();
+            const { imgW, imgH, cols, rows, margin, innerGap, a4W, a4H } = dims;
+
+            const baseWidth = 500 * state.zoom; 
+            const scale = baseWidth / a4W;
+            const baseHeight = a4H * scale;
+
+            canvasContainer.style.width = baseWidth + 'px';
+            canvasContainer.style.height = baseHeight + 'px';
+
+            canvasContainer.innerHTML = '';
+
+            const gridLayer = document.createElement('div');
+            gridLayer.className = 'absolute inset-0 z-0';
+            canvasContainer.appendChild(gridLayer);
+
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    const sx = margin + col * (imgW + innerGap);
+                    const sy = margin + row * (imgH + innerGap);
+
+                    const cellDiv = document.createElement('div');
+                    cellDiv.className = 'absolute border border-dashed border-gray-400 bg-white flex items-center justify-center overflow-hidden pointer-events-none';
+                    cellDiv.style.left = (sx * scale) + 'px';
+                    cellDiv.style.top = (sy * scale) + 'px';
+                    cellDiv.style.width = (imgW * scale) + 'px';
+                    cellDiv.style.height = (imgH * scale) + 'px';
+
+                    if (state.bgData) {
+                        const img = document.createElement('img');
+                        img.src = state.bgData;
+                        img.className = 'w-full h-full object-contain'; 
+                        cellDiv.appendChild(img);
+                    } else {
+                        cellDiv.innerHTML = `<span class="text-gray-300 text-sm font-bold">預覽框 ${row * cols + col + 1}</span>`;
+                    }
+                    
+                    if (row !== 0 || col !== 0) {
+                        state.variables.forEach((v, vIdx) => {
+                            const ghostText = document.createElement('div');
+                            ghostText.className = `ghost-text-var-${vIdx} absolute whitespace-nowrap font-bold opacity-60 leading-none pointer-events-none`;
+                            ghostText.innerText = state.parsedData[0]?.[vIdx] || '';
+                            cellDiv.appendChild(ghostText);
+                        });
+                    }
+                    gridLayer.appendChild(cellDiv);
+                }
+            }
+
+            drawPreviewCropMarks(gridLayer, dims, scale);
+
+            state.variables.forEach((v, vIdx) => {
+                const dragItem = document.createElement('div');
+                dragItem.className = `drag-item var-${vIdx} ${state.activeVarIndex === vIdx ? 'active' : 'inactive'}`;
+                dragItem.dataset.idx = vIdx;
+                dragItem.innerText = state.parsedData[0]?.[vIdx] || `變數 ${vIdx + 1}`;
+                canvasContainer.appendChild(dragItem);
+            });
+
+            updateDragPositions();
+        }
+
+        // 預覽區專用：畫出紅色輔助裁切線
+        function drawPreviewCropMarks(container, dims, scale) {
+            const { margin, innerGap, imgW, imgH, cols, rows } = dims;
+            if (rows === 2) {
+                const my = (margin + imgH + innerGap / 2) * scale;
+                const line = document.createElement('div');
+                line.className = 'absolute w-full border-t border-dashed border-red-500 opacity-60 pointer-events-none';
+                line.style.top = my + 'px'; line.style.left = '0';
+                container.appendChild(line);
+            }
+            if (cols === 2) {
+                const mx = (margin + imgW + innerGap / 2) * scale;
+                const line = document.createElement('div');
+                line.className = 'absolute h-full border-l border-dashed border-red-500 opacity-60 pointer-events-none';
+                line.style.left = mx + 'px'; line.style.top = '0';
+                container.appendChild(line);
+            }
+        }
+
+        // 更新所有拖拉元件與分身文字的樣式及位置
+        function updateDragPositions() {
+            const dims = getCellDimensions();
+            const scale = (500 * state.zoom) / dims.a4W; 
+            const ptToMm = 25.4 / 72;
+
+            const firstCellX = dims.margin * scale;
+            const firstCellY = dims.margin * scale;
+            const cellW = dims.imgW * scale;
+            const cellH = dims.imgH * scale;
+
+            state.variables.forEach((v, vIdx) => {
+                const previewFontSizePx = v.size * ptToMm * scale;
+                const absX = firstCellX + (v.posX * cellW / 100);
+                const absY = firstCellY + (v.posY * cellH / 100);
+
+                // 計算對齊的 CSS Transform
+                // 將垂直位置也設為 -50% (中心點對齊)，確保拖拉體驗流暢且精確
+                let tx = '0';
+                if (v.align === 'right') tx = '-100%';
+                else if (v.align === 'center') tx = '-50%';
+                let transformStr = `translate(${tx}, -50%)`;
+
+                const dragItem = canvasContainer.querySelector(`.drag-item.var-${vIdx}`);
+                if (dragItem) {
+                    dragItem.style.left = absX + 'px';
+                    dragItem.style.top = absY + 'px';
+                    dragItem.style.fontSize = previewFontSizePx + 'px';
+                    dragItem.style.color = v.color;
+                    dragItem.style.fontFamily = fontMap[v.font] || fontMap['sans-serif'];
+                    dragItem.style.transform = transformStr;
+                    
+                    if (state.activeVarIndex === vIdx) {
+                        dragItem.classList.add('active');
+                        dragItem.classList.remove('inactive');
+                    } else {
+                        dragItem.classList.add('inactive');
+                        dragItem.classList.remove('active');
+                    }
+                }
+
+                document.querySelectorAll(`.ghost-text-var-${vIdx}`).forEach(ghost => {
+                    ghost.style.left = v.posX + '%';
+                    ghost.style.top = v.posY + '%';
+                    ghost.style.fontSize = previewFontSizePx + 'px';
+                    ghost.style.color = v.color;
+                    ghost.style.fontFamily = fontMap[v.font] || fontMap['sans-serif'];
+                    ghost.style.transform = transformStr;
+                });
+            });
+        }
+
+        // 鍵盤微調邏輯
+        window.addEventListener('keydown', (e) => {
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+            
+            const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+            if (!keys.includes(e.key)) return;
+            
+            e.preventDefault(); 
+
+            if (state.variables.length === 0) return;
+
+            const dims = getCellDimensions();
+            const scale = (500 * state.zoom) / dims.a4W;
+            
+            const shiftXPercent = 100 / (dims.imgW * scale);
+            const shiftYPercent = 100 / (dims.imgH * scale);
+            
+            let v = state.variables[state.activeVarIndex];
+            let multiplier = e.shiftKey ? 10 : 1;
+
+            if (e.key === 'ArrowUp') v.posY -= shiftYPercent * multiplier;
+            if (e.key === 'ArrowDown') v.posY += shiftYPercent * multiplier;
+            if (e.key === 'ArrowLeft') v.posX -= shiftXPercent * multiplier;
+            if (e.key === 'ArrowRight') v.posX += shiftXPercent * multiplier;
+
+            v.posX = Math.max(0, Math.min(100, v.posX));
+            v.posY = Math.max(0, Math.min(100, v.posY));
+
+            updateDragPositions();
+        });
+
+        // ==========================================
+        // 核心優化：拖拉邏輯 (相對偏移量 Drag Offset)
+        // ==========================================
+        let isDragging = false;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        
+        canvasContainer.addEventListener('mousedown', (e) => {
+            const item = e.target.closest('.drag-item');
+            if (item) {
+                isDragging = true;
+                const idx = parseInt(item.dataset.idx);
+                
+                if (state.activeVarIndex !== idx) {
+                    state.activeVarIndex = idx;
+                    updateSettingsPanel();
+                    updateDragPositions();
+                }
+
+                // 取得目前畫布比例與位置
+                const rect = canvasContainer.getBoundingClientRect();
+                const dims = getCellDimensions();
+                const scale = (500 * state.zoom) / dims.a4W;
+
+                const firstCellX = dims.margin * scale;
+                const firstCellY = dims.margin * scale;
+                const cellW = dims.imgW * scale;
+                const cellH = dims.imgH * scale;
+
+                // 取得目前變數「錨點」的絕對座標
+                let anchorX = firstCellX + (state.variables[idx].posX * cellW / 100);
+                let anchorY = firstCellY + (state.variables[idx].posY * cellH / 100);
+
+                // 計算滑鼠目前的絕對座標
+                let mouseX = e.clientX - rect.left;
+                let mouseY = e.clientY - rect.top;
+
+                // 記錄滑鼠點擊位置與錨點之間的「偏移量」
+                dragOffsetX = mouseX - anchorX;
+                dragOffsetY = mouseY - anchorY;
+
+                e.preventDefault();
+            }
+        });
+        
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const rect = canvasContainer.getBoundingClientRect();
+            const dims = getCellDimensions();
+            const scale = (500 * state.zoom) / dims.a4W;
+
+            // 目前滑鼠座標
+            let mouseX = e.clientX - rect.left;
+            let mouseY = e.clientY - rect.top;
+
+            // 扣除偏移量，還原出平滑移動的目標錨點位置
+            let targetX = mouseX - dragOffsetX;
+            let targetY = mouseY - dragOffsetY;
+
+            // 邊界限制設定
+            const minX = dims.margin * scale;
+            const minY = dims.margin * scale;
+            const maxX = minX + (dims.imgW * scale);
+            const maxY = minY + (dims.imgH * scale);
+
+            targetX = Math.max(minX, Math.min(targetX, maxX));
+            targetY = Math.max(minY, Math.min(targetY, maxY));
+
+            // 更新至 state 狀態中
+            state.variables[state.activeVarIndex].posX = ((targetX - minX) / (dims.imgW * scale)) * 100;
+            state.variables[state.activeVarIndex].posY = ((targetY - minY) / (dims.imgH * scale)) * 100;
+
+            updateDragPositions();
+        });
+        
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mouseleave', () => { if(isDragging) isDragging = false; });
+
+        // 背景圖與 Excel 處理
+        document.getElementById('bg-input').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                state.bgData = ev.target.result;
+                const img = new Image();
+                img.onload = () => {
+                    state.bgNaturalWidth = img.width;
+                    state.bgNaturalHeight = img.height;
+                    updateEditorDimensions(); 
+                };
+                img.src = state.bgData;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        document.getElementById('excel-input').addEventListener('change', e => {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const data = new Uint8Array(ev.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+                document.getElementById('name-list').value = rows
+                    .filter(r => r.length > 0)
+                    .map(r => r.map(c => String(c).trim()).join(', '))
+                    .join('\n');
+                parseData();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // 多字型上傳邏輯
+        document.getElementById('font-upload').addEventListener('change', function(e) {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            
+            const statusDiv = document.getElementById('font-upload-status');
+            statusDiv.innerHTML = `<span class="text-blue-500">正在載入字型...</span>`;
+            let loadedCount = 0;
+
+            Array.from(files).forEach(file => {
+                const reader = new FileReader();
+                const safeName = 'CustomFont_' + Math.random().toString(36).substr(2, 9);
+                
+                reader.onload = function(event) {
+                    const newFont = new FontFace(safeName, `url(${event.target.result})`);
+                    newFont.load().then(font => {
+                        document.fonts.add(font);
+                        fontMap[safeName] = `'${safeName}', sans-serif`;
+                        
+                        const fontSelect = document.getElementById('var-font');
+                        const option = document.createElement('option');
+                        option.value = safeName;
+                        option.text = `自訂: ${file.name}`;
+                        fontSelect.appendChild(option);
+
+                        loadedCount++;
+                        statusDiv.innerHTML = `<span class="text-green-600 font-bold">成功載入 ${loadedCount} 個字型！請至步驟 3 選用。</span>`;
+                    }).catch(err => {
+                        console.warn("字型載入失敗:", err);
+                        statusDiv.innerHTML = `<span class="text-red-500">部分字型載入失敗，請確認檔案格式是否正確。</span>`;
+                    });
+                };
+                reader.readAsDataURL(file);
+            });
+        });
+
+        function drawCropMarks(doc, dims) {
+            const { margin, a4W, a4H, innerGap, imgW, imgH, cols, rows } = dims;
+            doc.setDrawColor(220, 220, 220); 
+            doc.setLineWidth(0.2);
+            const L = 5;
+
+            if (rows === 2) {
+                const my = margin + imgH + (innerGap / 2);
+                doc.line(0, my, L, my); doc.line(a4W - L, my, a4W, my);
+            }
+            if (cols === 2) {
+                const mx = margin + imgW + (innerGap / 2);
+                doc.line(mx, 0, mx, L); doc.line(mx, a4H - L, mx, a4H);
+            }
+            if (cols === 2 && rows === 2) {
+                const mx = margin + imgW + (innerGap / 2);
+                const my = margin + imgH + (innerGap / 2);
+                doc.line(mx - L/2, my, mx + L/2, my);
+                doc.line(mx, my - L/2, mx, my + L/2);
+            }
+        }
+
+        function createTextCanvasForRecord(record, imgW_mm, imgH_mm, variables) {
+            const canvas = document.createElement('canvas');
+            const dpiScale = 8; 
+            
+            canvas.width = imgW_mm * dpiScale;
+            canvas.height = imgH_mm * dpiScale;
+            const ctx = canvas.getContext('2d');
+            const ptToMm = 25.4 / 72;
+
+            variables.forEach((v, vIdx) => {
+                const text = record[vIdx];
+                if (!text || text.trim() === '') return;
+
+                const fontSizePx = v.size * ptToMm * dpiScale;
+                const fontStack = fontMap[v.font] || fontMap['sans-serif'];
+                
+                ctx.font = `bold ${fontSizePx}px ${fontStack}`;
+                
+                // 【核心修改】：將 PDF 輸出的垂直基準也改為中心 (middle)
+                ctx.textBaseline = 'middle';
+                
+                // 套用使用者選定的水平對齊方式
+                ctx.textAlign = v.align === 'right' ? 'right' : (v.align === 'center' ? 'center' : 'left');
+                ctx.fillStyle = v.color;
+
+                const textX = (v.posX * imgW_mm / 100) * dpiScale;
+                const textY = (v.posY * imgH_mm / 100) * dpiScale;
+
+                ctx.fillText(text, textX, textY);
+            });
+            
+            return canvas.toDataURL('image/png');
+        }
+
+        async function generatePDF() {
+            if (state.parsedData.length === 0 || (state.parsedData.length === 1 && state.parsedData[0][0] === '文本內容')) {
+                return alert("請輸入或匯入名單資料");
+            }
+            if (!state.bgData) return alert("請上傳底圖");
+
+            const btn = document.getElementById('generate-btn');
+            const status = document.getElementById('status-msg');
+            btn.disabled = true;
+            btn.innerText = "精確排版中...";
+
+            try {
+                const dims = getCellDimensions();
+                const { imgW, imgH, cols, rows, margin, innerGap, orientation } = dims;
+
+                const doc = new jsPDF({ orientation: orientation, unit: 'mm', format: 'a4', compress: true });
+
+                for (let i = 0; i < state.parsedData.length; i++) {
+                    const record = state.parsedData[i];
+                    const slot = i % (cols * rows);
+                    if (i > 0 && slot === 0) doc.addPage();
+                    
+                    const col = slot % cols;
+                    const row = Math.floor(slot / cols);
+                    
+                    const sx = margin + col * (imgW + innerGap);
+                    const sy = margin + row * (imgH + innerGap);
+
+                    let drawX = sx, drawY = sy, drawW = imgW, drawH = imgH;
+                    if (state.bgNaturalWidth && state.bgNaturalHeight) {
+                        const scale = Math.min(imgW / state.bgNaturalWidth, imgH / state.bgNaturalHeight);
+                        drawW = state.bgNaturalWidth * scale;
+                        drawH = state.bgNaturalHeight * scale;
+                        drawX = sx + (imgW - drawW) / 2;
+                        drawY = sy + (imgH - drawH) / 2;
+                    }
+                    doc.addImage(state.bgData, 'JPEG', drawX, drawY, drawW, drawH, 'bgImage', 'FAST');
+                    if (slot === 0) drawCropMarks(doc, dims);
+                    
+                    const textImgData = createTextCanvasForRecord(record, imgW, imgH, state.variables);
+                    doc.addImage(textImgData, 'PNG', sx, sy, imgW, imgH, undefined, 'FAST');
+                    
+                    if (i % 5 === 0) status.innerText = `進度: ${i + 1} / ${state.parsedData.length}`;
+                }
+
+                doc.save(`合併列印成品_${new Date().getTime()}.pdf`);
+                status.innerText = "下載成功！裁切時請對準中線。";
+            } catch (e) {
+                console.error("PDF Error:", e);
+                alert(`產出失敗：系統資源不足或發生錯誤。`);
+                status.innerText = "產出失敗";
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "產出並下載 PDF";
+            }
+        }
+
+        // 初始化
+        parseData();
+        setLayout(1);
+    </script>
+</body>
+</html>
